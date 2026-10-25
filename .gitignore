@@ -1,0 +1,21 @@
+# Environment secrets (API keys)
+.env
+*.env
+
+# Virtual environments
+jarvis_env/
+venv/
+env/
+
+# Python cache & compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Audio files & recordings
+*.wav
+*.mp3
+
+# IDE / Editor folders
+.vscode/
+.idea/
