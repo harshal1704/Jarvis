@@ -1,11 +1,28 @@
 import io
-import re
+import os
 import pygame
 import speech_recognition as sr
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+from google.genai.errors import APIError
 from gtts import gTTS
 
 # -----------------------------
-# 1. SETUP AUDIO & RECOGNIZER
+# 1. ENVIRONMENT & LLM CLIENT SETUP
+# -----------------------------
+load_dotenv()
+api_key = os.getenv("GEMINI_API_KEY")
+
+if not api_key:
+    raise ValueError(
+        "GEMINI_API_KEY is not set. Please create a .env file and add your key."
+    )
+
+client = genai.Client(api_key=api_key)
+
+# -----------------------------
+# 2. AUDIO & SPEECH SETUP
 # -----------------------------
 pygame.mixer.init()
 
@@ -23,10 +40,16 @@ LANGUAGES = {
         "welcome": "Jarvis is online in English mode. How can I help you?",
         "repeat": "I didn't catch that, could you please repeat?",
         "offline": "Network error reaching speech servers.",
-        "echo_prefix": "I heard you say: ",
+        "api_error": "I encountered an error connecting to my cognitive servers.",
         "bye": "Goodbye, shutting down.",
         "exit_words": ["exit", "stop", "quit", "shutdown"],
         "triggers": ["english", "one", "1", "first"],
+        "system_instruction": (
+            "You are Jarvis, a fast, witty, and highly intelligent personal AI assistant. "
+            "You are communicating entirely via voice, so keep your answers clear, natural, and concise—"
+            "ideally 1 to 3 sentences maximum unless explicitly asked for detail. "
+            "Never output markdown tables, asterisks, bullet points, or code blocks. Speak conversationally in English."
+        ),
     },
     "hi": {
         "code": "hi",
@@ -36,10 +59,15 @@ LANGUAGES = {
         "welcome": "जार्विस हिंदी मोड में तैयार है। कहिए, मैं क्या मदद करूँ?",
         "repeat": "मुझे समझ नहीं आया, क्या आप दोबारा बोल सकते हैं?",
         "offline": "इंटरनेट में समस्या आ रही है।",
-        "echo_prefix": "मैंने सुना: ",
+        "api_error": "सर्वर से संपर्क करने में समस्या आ रही है।",
         "bye": "अलविदा, फिर मिलेंगे!",
         "exit_words": ["exit", "stop", "quit", "अलविदा", "बंद करो", "रुक जाओ"],
         "triggers": ["hindi", "हिंदी", "two", "2", "second"],
+        "system_instruction": (
+            "आप जार्विस हैं, एक बुद्धिमान और तेज़ आवाज़ सहायक। "
+            "चूँकि आपका उत्तर आवाज़ (TTS) द्वारा बोला जाएगा, इसलिए उत्तर हमेशा छोटा, सरल और संवादात्मक रखें (अधिकतम 1-2 वाक्य)। "
+            "बुलेट पॉइंट्स, मार्कडाउन या कोड का प्रयोग न करें। शुद्ध और सहज हिंदी में जवाब दें।"
+        ),
     },
     "mr": {
         "code": "mr",
@@ -49,16 +77,27 @@ LANGUAGES = {
         "welcome": "जार्विस मराठी मोडमध्ये सुरू झाला आहे. बोला, काय मदत करू?",
         "repeat": "मला समजले नाही, कृपया पुन्हा एकदा सांगा?",
         "offline": "इंटरनेटमध्ये अडचण येत आहे.",
-        "echo_prefix": "तुम्ही म्हणालात: ",
+        "api_error": "सर्व्हरशी संपर्क साधण्यात त्रुटी येत आहे.",
         "bye": "निरोप, काळजी घ्या!",
         "exit_words": ["exit", "stop", "quit", "थांब", "बंद कर", "निरोप"],
         "triggers": ["marathi", "मराठी", "three", "3", "third"],
+        "system_instruction": (
+            "तुम्ही जार्विस आहात, एक हुशार आणि कार्यक्षम व्हॉइस असिस्टंट. "
+            "तुमचे उत्तर ऑडिओमध्ये बोलले जाणार असल्याने, उत्तर अगदी लहान, स्पष्ट आणि बोलण्यासारखे ठेवा (जास्तीत जास्त १ ते २ वाक्ये). "
+            "मार्कडाउन, बुलेट पॉइंट्स किंवा तारे वापरू नका. सरळ आणि शुद्ध मराठीत संवाद साधा."
+        ),
     },
 }
 
+# Supported models in priority order
+MODEL_CANDIDATES = [
+    "gemini-3.8-flash",
+    "gemini-3.8-pro",
+]
+
 
 # -----------------------------
-# 2. CORE FUNCTIONS
+# 3. CORE AUDIO & VOICE FUNCTIONS
 # -----------------------------
 def speak(text: str, lang_code: str = "en", tld: str = "co.in"):
     """Speaks out text using gTTS and pygame."""
@@ -81,15 +120,12 @@ def speak(text: str, lang_code: str = "en", tld: str = "co.in"):
 
 
 def listen_raw(sr_language: str = "en-IN") -> tuple[str, str]:
-    """Captures microphone input and transcribes using specified speech-to-text language.
-
-    Returns: (status, user_text)
-    """
+    """Captures microphone input and transcribes using specified speech-to-text language."""
     with sr.Microphone() as source:
         print("\n🎙️ Listening...")
 
         try:
-            audio = listener.listen(source, timeout=6, phrase_time_limit=6)
+            audio = listener.listen(source, timeout=6, phrase_time_limit=8)
             print("⏳ Processing speech...")
 
             text = listener.recognize_google(audio, language=sr_language)
@@ -136,7 +172,6 @@ def select_language_by_voice() -> dict:
             speak("Internet connection error. Trying again...", lang_code="en")
             continue
 
-        # Match spoken voice input to the corresponding language profile
         for lang_key, config in LANGUAGES.items():
             if any(trigger in response for trigger in config["triggers"]):
                 speak(f"Selected {config['name']}.", lang_code="en")
@@ -146,22 +181,88 @@ def select_language_by_voice() -> dict:
 
 
 # -----------------------------
-# 3. MAIN RUN LOOP
+# 4. GEMINI REASONING ENGINE (WITH FAST FALLBACK)
+# -----------------------------
+class JarvisBrain:
+    def __init__(self, system_instruction: str):
+        self.system_instruction = system_instruction
+        self.chat_session = None
+        self.active_model = None
+        self._init_session()
+
+    def _init_session(self):
+        """Attempts to initialize a chat session using the supported model candidates."""
+        for model_name in MODEL_CANDIDATES:
+            try:
+                self.chat_session = client.chats.create(
+                    model=model_name,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self.system_instruction,
+                        temperature=0.7,
+                    ),
+                )
+                self.active_model = model_name
+                print(f" Connected to LLM Brain using model: {self.active_model}")
+                return
+            except Exception as e:
+                print(f"⚠️ Could not initialize with {model_name}: {e}")
+
+        raise RuntimeError("All configured Gemini models failed to initialize.")
+
+    def ask(self, user_prompt: str) -> str:
+        """Sends user prompt with fast fallback to alternate supported models."""
+        for model_name in MODEL_CANDIDATES:
+            try:
+                if self.active_model != model_name:
+                    print(f" Switching fallback to: {model_name}")
+                    self.chat_session = client.chats.create(
+                        model=model_name,
+                        config=types.GenerateContentConfig(
+                            system_instruction=self.system_instruction,
+                            temperature=0.7,
+                        ),
+                    )
+                    self.active_model = model_name
+
+                response = self.chat_session.send_message(user_prompt)
+                return response.text.strip()
+
+            except APIError as e:
+                print(f"⚠️ API Error on {model_name} (Code {e.code}): {e.message}")
+                if e.code in [404, 429, 500, 503]:
+                    continue
+                raise e
+            except Exception as e:
+                print(f"⚠️ Unexpected error on {model_name}: {e}")
+                continue
+
+        raise RuntimeError("All fallback models are currently unavailable.")
+
+
+# -----------------------------
+# 5. MAIN RUN LOOP
 # -----------------------------
 def main():
-    # 1. Calibrate ambient noise on launch
+    # 1. Calibrate background noise
     with sr.Microphone() as source:
         print("Calibrating microphone for room noise... (1 second)")
         listener.adjust_for_ambient_noise(source, duration=1.0)
         print("Microphone ready.")
 
-    # 2. Select language purely by voice
+    # 2. Voice-driven language selection
     current_lang = select_language_by_voice()
 
-    # 3. Greet in the chosen language
-    speak(current_lang["welcome"], lang_code=current_lang["code"], tld=current_lang.get("tld", "com"))
+    # 3. Create persistent chat session with the matching persona and fallback
+    brain = JarvisBrain(current_lang["system_instruction"])
 
-    # 4. Continuous listening loop
+    # 4. Greet user
+    speak(
+        current_lang["welcome"],
+        lang_code=current_lang["code"],
+        tld=current_lang.get("tld", "com"),
+    )
+
+    # 5. Main AI conversation loop
     while True:
         status, command = listen_raw(sr_language=current_lang["sr_code"])
 
@@ -169,21 +270,47 @@ def main():
             continue
 
         if status == "unclear":
-            speak(current_lang["repeat"], lang_code=current_lang["code"], tld=current_lang.get("tld", "com"))
+            speak(
+                current_lang["repeat"],
+                lang_code=current_lang["code"],
+                tld=current_lang.get("tld", "com"),
+            )
             continue
 
         if status == "error":
-            speak(current_lang["offline"], lang_code=current_lang["code"], tld=current_lang.get("tld", "com"))
+            speak(
+                current_lang["offline"],
+                lang_code=current_lang["code"],
+                tld=current_lang.get("tld", "com"),
+            )
             continue
 
-        # Check for shutdown trigger with negation protection
+        # Exit check
         if is_exit_command(command, current_lang["exit_words"]):
-            speak(current_lang["bye"], lang_code=current_lang["code"], tld=current_lang.get("tld", "com"))
+            speak(
+                current_lang["bye"],
+                lang_code=current_lang["code"],
+                tld=current_lang.get("tld", "com"),
+            )
             break
 
-        # Echo captured command in the active language
-        response_text = f"{current_lang['echo_prefix']}{command}"
-        speak(response_text, lang_code=current_lang["code"], tld=current_lang.get("tld", "com"))
+        # Send spoken command to Gemini Brain
+        try:
+            print("🧠 Jarvis is thinking...")
+            ai_reply = brain.ask(command)
+
+            speak(
+                ai_reply,
+                lang_code=current_lang["code"],
+                tld=current_lang.get("tld", "com"),
+            )
+        except Exception as e:
+            print(f"Brain Error: {e}")
+            speak(
+                current_lang["api_error"],
+                lang_code=current_lang["code"],
+                tld=current_lang.get("tld", "com"),
+            )
 
 
 if __name__ == "__main__":
