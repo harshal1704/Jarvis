@@ -14,32 +14,61 @@ listener.pause_threshold = 1.0
 listener.dynamic_energy_adjustment_damping = 0.15
 listener.dynamic_energy_ratio = 1.5
 
+# Language configurations dictionary
+LANGUAGES = {
+    "1": {
+        "code": "en",
+        "sr_code": "en-IN",
+        "name": "English",
+        "tld": "co.in",
+        "welcome": "Jarvis is online in English mode. How can I help you?",
+        "repeat": "I didn't catch that, could you please repeat?",
+        "offline": "Network error reaching speech servers.",
+        "echo_prefix": "I heard you say: ",
+        "bye": "Goodbye, shutting down.",
+        "exit_words": ["exit", "stop", "quit", "shutdown"],
+    },
+    "2": {
+        "code": "hi",
+        "sr_code": "hi-IN",
+        "name": "Hindi",
+        "tld": "com",
+        "welcome": "जार्विस हिंदी मोड में तैयार है। कहिए, मैं क्या मदद करूँ?",
+        "repeat": "मुझे समझ नहीं आया, क्या आप दोबारा बोल सकते हैं?",
+        "offline": "इंटरनेट में समस्या आ रही है।",
+        "echo_prefix": "मैंने सुना: ",
+        "bye": "अलविदा, फिर मिलेंगे!",
+        "exit_words": ["exit", "stop", "quit", "अलविदा", "बंद करो", "रुक जाओ"],
+    },
+    "3": {
+        "code": "mr",
+        "sr_code": "mr-IN",
+        "name": "Marathi",
+        "tld": "com",
+        "welcome": "जार्विस मराठी मोडमध्ये सुरू झाला आहे. बोला, काय मदत करू?",
+        "repeat": "मला समजले नाही, कृपया पुन्हा एकदा सांगा?",
+        "offline": "इंटरनेटमध्ये अडचण येत आहे.",
+        "echo_prefix": "तुम्ही म्हणालात: ",
+        "bye": "निरोप, काळजी घ्या!",
+        "exit_words": ["exit", "stop", "quit", "थांब", "बंद कर", "निरोप"],
+    },
+}
+
 
 # -----------------------------
 # 2. CORE FUNCTIONS
 # -----------------------------
-def is_devanagari(text: str) -> bool:
-    """Checks if text contains Hindi/Marathi (Devanagari) characters."""
-    return bool(re.search(r"[\u0900-\u097F]", text))
-
-
-def speak(text: str, lang: str = "en"):
-    """
-    Speaks out text using gTTS and pygame.
-    lang can be 'en', 'hi', or 'mr'.
-    """
+def speak(text: str, lang_config: dict):
+    """Speaks out text in the chosen language using gTTS and pygame."""
     print(f"🤖 Jarvis: {text}")
 
-    # Set appropriate language parameters
-    if lang == "mr":
-        tts = gTTS(text=text, lang="mr", slow=False)
-    elif lang == "hi":
-        tts = gTTS(text=text, lang="hi", slow=False)
-    else:
-        # Indian English pronunciation
-        tts = gTTS(text=text, lang="en", tld="co.in", slow=False)
-
     try:
+        tts = gTTS(
+            text=text,
+            lang=lang_config["code"],
+            tld=lang_config.get("tld", "com"),
+            slow=False,
+        )
         audio_stream = io.BytesIO()
         tts.write_to_fp(audio_stream)
         audio_stream.seek(0)
@@ -54,95 +83,101 @@ def speak(text: str, lang: str = "en"):
         print(f"Audio playback error: {e}")
 
 
-def listen():
-    """
-    Captures microphone input and attempts detection in:
-    1. Indian English ('en-IN')
-    2. Hindi ('hi-IN')
-    3. Marathi ('mr-IN')
-    Returns: (status, recognized_text, language_code)
+def listen(lang_config: dict) -> tuple[str, str]:
+    """Captures microphone input and transcribes based on chosen language.
+
+    Returns: (status, user_text)
     """
     with sr.Microphone() as source:
-        print("\n🎙️ Listening... (Speak in English, Hindi, or Marathi)")
+        print(f"\n🎙️ Listening... (Speak in {lang_config['name']})")
 
         try:
             audio = listener.listen(source, timeout=6, phrase_time_limit=8)
-            print("⏳ Processing...")
+            print("⏳ Processing speech...")
 
-            # Attempt 1: Indian English
-            try:
-                text = listener.recognize_google(audio, language="en-IN")
-                print(f"👤 You said (EN): '{text}'")
-                return "success", text.lower().strip(), "en"
-            except sr.UnknownValueError:
-                pass
-
-            # Attempt 2: Hindi
-            try:
-                text = listener.recognize_google(audio, language="hi-IN")
-                print(f"👤 You said (HI): '{text}'")
-                return "success", text.strip(), "hi"
-            except sr.UnknownValueError:
-                pass
-
-            # Attempt 3: Marathi
-            try:
-                text = listener.recognize_google(audio, language="mr-IN")
-                print(f"👤 You said (MR): '{text}'")
-                return "success", text.strip(), "mr"
-            except sr.UnknownValueError:
-                return "unclear", "", ""
+            text = listener.recognize_google(audio, language=lang_config["sr_code"])
+            print(f"👤 You said: '{text}'")
+            return "success", text.strip()
 
         except sr.WaitTimeoutError:
-            return "timeout", "", ""
+            return "timeout", ""
+        except sr.UnknownValueError:
+            return "unclear", ""
         except sr.RequestError:
-            return "error", "", ""
+            return "error", ""
+
+
+def is_exit_command(text: str, exit_words: list) -> bool:
+    """Checks for explicit exit commands while ignoring negations like 'don't
+
+    stop'.
+    """
+    cleaned = text.lower().strip()
+
+    # Negation words in English, Hindi, and Marathi
+    negations = ["don't", "dont", "do not", "नको", "मत", "नाही"]
+    if any(neg in cleaned for neg in negations):
+        return False
+
+    # Check for exact whole-word triggers
+    words = cleaned.split()
+    return any(term in words or term == cleaned for term in exit_words)
+
+
+def choose_language() -> dict:
+    """Terminal prompt to select the active language profile."""
+    print("\n==============================")
+    print("   CHOOSE JARVIS LANGUAGE     ")
+    print("==============================")
+    print("1. English (Indian Accent)")
+    print("2. Hindi (हिंदी)")
+    print("3. Marathi (मराठी)")
+    print("==============================")
+
+    while True:
+        choice = input("Enter choice (1, 2, or 3): ").strip()
+        if choice in LANGUAGES:
+            selected = LANGUAGES[choice]
+            print(f"\n✅ Mode selected: {selected['name']}\n")
+            return selected
+        print("Invalid choice. Please type 1, 2, or 3.")
 
 
 # -----------------------------
 # 3. MAIN RUN LOOP
 # -----------------------------
 def main():
-    speak("Jarvis is online and ready.", lang="en")
+    current_lang = choose_language()
 
-    # Calibrate ambient noise once at startup
+    # Calibrate ambient microphone noise once at start
     with sr.Microphone() as source:
-        print("Calibrating room noise... (1 second)")
+        print("Calibrating microphone for room noise... (1 second)")
         listener.adjust_for_ambient_noise(source, duration=1.0)
-        print("Calibration complete.")
+        print("Microphone ready.")
+
+    speak(current_lang["welcome"], current_lang)
 
     while True:
-        status, command, lang = listen()
-
-        if status == "unclear":
-            speak("I didn't catch that, could you repeat?", lang="en")
-            continue
+        status, command = listen(current_lang)
 
         if status == "timeout":
             continue
 
-        if status == "error":
-            speak("Network error reaching speech servers.", lang="en")
+        if status == "unclear":
+            speak(current_lang["repeat"], current_lang)
             continue
 
-        # Exit conditions
-        exit_phrases = ["exit", "stop", "quit", "अलविदा", "बंद करो", "थांब", "बंद कर"]
-        if any(term in command.lower() for term in exit_phrases):
-            if lang == "mr":
-                speak("निरोप, काळजी घ्या!", lang="mr")
-            elif lang == "hi":
-                speak("अलविदा, फिर मिलेंगे!", lang="hi")
-            else:
-                speak("Goodbye, shutting down.", lang="en")
+        if status == "error":
+            speak(current_lang["offline"], current_lang)
+            continue
+
+        # Check for shutdown trigger with negation protection
+        if is_exit_command(command, current_lang["exit_words"]):
+            speak(current_lang["bye"], current_lang)
             break
 
-        # Response in matching language
-        if lang == "mr":
-            speak(f"तुम्ही म्हणालात: {command}", lang="mr")
-        elif lang == "hi":
-            speak(f"मैंने सुना: {command}", lang="hi")
-        else:
-            speak(f"I heard you say: {command}", lang="en")
+        # Echo captured command in the active language
+        speak(f"{current_lang['echo_prefix']}{command}", current_lang)
 
 
 if __name__ == "__main__":
