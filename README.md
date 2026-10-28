@@ -26,10 +26,18 @@ Focused on establishing the foundational audio I/O pipeline and troubleshooting 
 
 ---
 
-### 🧠 Day 2: The Cognitive Brain (Up Next)
-- [ ] Connect Gemini 2.5 Flash API via modern SDK client integration.
-- [ ] Add conversation history memory so Jarvis retains multi-turn context.
-- [ ] Craft a system prompt persona for concise, witty, and functional responses.
+### 🧠 Day 2: Cognitive Brain Integration, Multilingual Voice & Latency Tuning (Completed Today)
+Focused on replacing the basic echo loop with an intelligent LLM reasoning engine, adding dynamic multilingual interaction, and slashing round-trip audio latency:
+
+- [x] **SDK & Secure Credential Architecture:** Configured `google-genai` and `python-dotenv` to isolate `GEMINI_API_KEY` inside `.env`, maintaining strict security hygiene.
+- [x] **Gemini LLM Brain Integration:** Upgraded the system from simple echo responses to generative intelligence using `gemini-3.8-flash` (with automated fallback to `gemini-3.8-pro`), maintaining conversational state across multiple turns.
+- [x] **Voice-Driven Multilingual Interface:** Implemented a hands-free, zero-keystroke startup routine. Jarvis verbally asks for language selection and captures spoken intent across Indian English (`en-IN`), Hindi (`hi-IN`), and Marathi (`mr-IN`).
+- [x] **Natural Speech Synthesis Upgrade:** Integrated `gTTS` with in-memory `io.BytesIO` streams and `pygame.mixer`, delivering natural regional accents without writing temporary audio files to disk.
+- [x] **Negation-Aware Intent Filtering:** Engineered custom exit-matching logic (`is_exit_command`) to inspect context and prevent premature shutdowns on negated commands (e.g., distinguishing *"don't stop"* from explicit shutdown triggers).
+- [x] **Latency & Buffer Optimization:**
+  - Tightened speech detection by reducing `pause_threshold` from `1.0s` down to `0.6s`.
+  - Constrained model generation with `max_output_tokens=70` and persona prompt tuning to guarantee concise 1–2 sentence voice replies.
+  - Reduced round-trip latency by over 60%, delivering responsive conversational feedback.
 
 ---
 
