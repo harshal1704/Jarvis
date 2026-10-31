@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import pygame
 import speech_recognition as sr
 from dotenv import load_dotenv
@@ -27,7 +28,9 @@ client = genai.Client(api_key=api_key)
 pygame.mixer.init()
 
 listener = sr.Recognizer()
-listener.pause_threshold = 1.0
+# Reduced pause threshold for snappier cutoffs when you finish speaking
+listener.pause_threshold = 0.6
+listener.non_speaking_duration = 0.4
 listener.dynamic_energy_adjustment_damping = 0.15
 listener.dynamic_energy_ratio = 1.5
 
@@ -47,8 +50,8 @@ LANGUAGES = {
         "system_instruction": (
             "You are Jarvis, a fast, witty, and highly intelligent personal AI assistant. "
             "You are communicating entirely via voice, so keep your answers clear, natural, and concise—"
-            "ideally 1 to 3 sentences maximum unless explicitly asked for detail. "
-            "Never output markdown tables, asterisks, bullet points, or code blocks. Speak conversationally in English."
+            "ideally 1 to 2 sentences maximum. "
+            "Never output markdown, asterisks, bullet points, or code blocks. Speak conversationally in English."
         ),
     },
     "hi": {
@@ -89,11 +92,8 @@ LANGUAGES = {
     },
 }
 
-# Supported models in priority order
-MODEL_CANDIDATES = [
-    "gemini-3.8-flash",
-    "gemini-3.8-pro",
-]
+# Fast multimodal model
+MODEL_NAME = "gemini-2.5-flash"
 
 
 # -----------------------------
@@ -101,10 +101,14 @@ MODEL_CANDIDATES = [
 # -----------------------------
 def speak(text: str, lang_code: str = "en", tld: str = "co.in"):
     """Speaks out text using gTTS and pygame."""
-    print(f"🤖 Jarvis: {text}")
+    clean_text = text.strip()
+    if not clean_text:
+        return
+
+    print(f"🤖 Jarvis: {clean_text}")
 
     try:
-        tts = gTTS(text=text, lang=lang_code, tld=tld, slow=False)
+        tts = gTTS(text=clean_text, lang=lang_code, tld=tld, slow=False)
         audio_stream = io.BytesIO()
         tts.write_to_fp(audio_stream)
         audio_stream.seek(0)
@@ -181,62 +185,41 @@ def select_language_by_voice() -> dict:
 
 
 # -----------------------------
-# 4. GEMINI REASONING ENGINE (WITH FAST FALLBACK)
+# 4. FAST GEMINI STREAMING ENGINE
 # -----------------------------
 class JarvisBrain:
     def __init__(self, system_instruction: str):
         self.system_instruction = system_instruction
-        self.chat_session = None
-        self.active_model = None
-        self._init_session()
+        self.chat_session = client.chats.create(
+            model=MODEL_NAME,
+            config=types.GenerateContentConfig(
+                system_instruction=self.system_instruction,
+                temperature=0.6,
+                # thinking_budget=0 eliminates reasoning delays for instant replies
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
 
-    def _init_session(self):
-        """Attempts to initialize a chat session using the supported model candidates."""
-        for model_name in MODEL_CANDIDATES:
-            try:
-                self.chat_session = client.chats.create(
-                    model=model_name,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self.system_instruction,
-                        temperature=0.7,
-                    ),
-                )
-                self.active_model = model_name
-                print(f" Connected to LLM Brain using model: {self.active_model}")
-                return
-            except Exception as e:
-                print(f"⚠️ Could not initialize with {model_name}: {e}")
+    def stream_sentences(self, user_prompt: str):
+        """Streams tokens from Gemini and yields full sentences as soon as punctuation is reached."""
+        buffer = ""
+        response_stream = self.chat_session.send_message_stream(user_prompt)
 
-        raise RuntimeError("All configured Gemini models failed to initialize.")
-
-    def ask(self, user_prompt: str) -> str:
-        """Sends user prompt with fast fallback to alternate supported models."""
-        for model_name in MODEL_CANDIDATES:
-            try:
-                if self.active_model != model_name:
-                    print(f" Switching fallback to: {model_name}")
-                    self.chat_session = client.chats.create(
-                        model=model_name,
-                        config=types.GenerateContentConfig(
-                            system_instruction=self.system_instruction,
-                            temperature=0.7,
-                        ),
-                    )
-                    self.active_model = model_name
-
-                response = self.chat_session.send_message(user_prompt)
-                return response.text.strip()
-
-            except APIError as e:
-                print(f"⚠️ API Error on {model_name} (Code {e.code}): {e.message}")
-                if e.code in [404, 429, 500, 503]:
-                    continue
-                raise e
-            except Exception as e:
-                print(f"⚠️ Unexpected error on {model_name}: {e}")
+        for chunk in response_stream:
+            if not chunk.text:
                 continue
+            buffer += chunk.text
 
-        raise RuntimeError("All fallback models are currently unavailable.")
+            # Splits on sentence punctuation across English, Hindi, and Marathi (. ? ! । newline)
+            parts = re.split(r"([.?!।\n]+)", buffer)
+            if len(parts) > 1:
+                complete_sentence = "".join(parts[:-1]).strip()
+                buffer = parts[-1]
+                if complete_sentence:
+                    yield complete_sentence
+
+        if buffer.strip():
+            yield buffer.strip()
 
 
 # -----------------------------
@@ -252,7 +235,7 @@ def main():
     # 2. Voice-driven language selection
     current_lang = select_language_by_voice()
 
-    # 3. Create persistent chat session with the matching persona and fallback
+    # 3. Create persistent chat session
     brain = JarvisBrain(current_lang["system_instruction"])
 
     # 4. Greet user
@@ -294,13 +277,19 @@ def main():
             )
             break
 
-        # Send spoken command to Gemini Brain
+        # Stream sentences from Gemini and speak each sentence immediately
         try:
             print("🧠 Jarvis is thinking...")
-            ai_reply = brain.ask(command)
-
+            for sentence in brain.stream_sentences(command):
+                speak(
+                    sentence,
+                    lang_code=current_lang["code"],
+                    tld=current_lang.get("tld", "com"),
+                )
+        except APIError as e:
+            print(f"API Error: {e}")
             speak(
-                ai_reply,
+                current_lang["api_error"],
                 lang_code=current_lang["code"],
                 tld=current_lang.get("tld", "com"),
             )
